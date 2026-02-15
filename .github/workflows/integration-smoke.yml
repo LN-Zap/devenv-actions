@@ -1,0 +1,65 @@
+name: Integration Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  bake-then-setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Create fake devenv binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/bin"
+          cat <<'EOF' > "$RUNNER_TEMP/bin/devenv"
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [[ "${1:-}" != "shell" || "${2:-}" != "--" || "${3:-}" != "env" ]]; then
+            echo "unexpected args" >&2
+            exit 1
+          fi
+          echo "PATH=/opt/devenv/bin:$PATH"
+          echo "DEVENV_SMOKE=1"
+          EOF
+          chmod +x "$RUNNER_TEMP/bin/devenv"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Bake activation assets
+        id: bake
+        uses: LN-Zap/bake-devenv-image@master
+        with:
+          snapshot_name: smoke-compose
+          activation_script_path: ${{ runner.temp }}/copilot-devenv-activate.sh
+          slim_caches: 'false'
+
+      - name: Activate baked environment
+        id: setup
+        uses: LN-Zap/setup-devenv@master
+        with:
+          mode: image
+          activation_script_path: ${{ runner.temp }}/copilot-devenv-activate.sh
+          verify_files: README.md
+          verify_commands: bash
+
+      - name: Validate composed execution
+        shell: bash
+        env:
+          ACTIVATION_SCRIPT_WRITTEN: ${{ steps.bake.outputs.activation_script_written }}
+          ACTIVATION_MODE: ${{ steps.setup.outputs.activation_mode }}
+          VERIFICATION_STATUS: ${{ steps.setup.outputs.verification_status }}
+        run: |
+          set -euo pipefail
+          test "$ACTIVATION_SCRIPT_WRITTEN" = "yes"
+          test "$ACTIVATION_MODE" = "script"
+          test "$VERIFICATION_STATUS" = "ok"
